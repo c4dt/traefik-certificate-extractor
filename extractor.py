@@ -90,13 +90,18 @@ def createCerts(args):
     data = json.loads(open(args.certificate).read())
 
     # Determine ACME version
-    acme_version = 2 if 'acme-v02' in data['Account']['Registration']['uri'] else 1
+    if args.certificate_resolver in data:
+        acme_version = 3
+    else:
+        acme_version = 2 if 'acme-v02' in data['Account']['Registration']['uri'] else 1
 
     # Find certificates
     if acme_version == 1:
         certs = data['DomainsCertificate']['Certs']
     elif acme_version == 2:
         certs = data['Certificates']
+    elif acme_version == 3:
+        certs = data[args.certificate_resolver]['Certificates']
 
     # Loop over all certificates
     names = []
@@ -112,6 +117,15 @@ def createCerts(args):
             privatekey = c['Key']
             fullchain = c['Certificate']
             sans = c['Domain']['SANs']
+        elif acme_version == 3:
+            print("Domain:", c['domain'])
+            name = c['domain']['main']
+            privatekey = c['key']
+            fullchain = c['certificate']
+            if 'sans' in c['domain']:
+                sans = c['domain']['sans']
+            else:
+                sans = False
 
         if (args.include and name not in args.include) or (args.exclude and name in args.exclude):
             continue
@@ -131,20 +145,20 @@ def createCerts(args):
 
             if args.flat:
                 # Write private key, certificate and chain to flat files
-                with (directory / name + '.key').open('w') as f:
+                with (directory / ( name + '.key' )).open('w') as f:
                     f.write(privatekey)
-                with (directory / name + '.crt').open('w') as f:
+                with (directory / ( name + '.crt')).open('w') as f:
                     f.write(fullchain)
-                with (directory / name + '.chain.pem').open('w') as f:
+                with (directory / ( name + '.chain.pem')).open('w') as f:
                     f.write(chain)
 
                 if sans:
                     for name in sans:
-                        with (directory / name + '.key').open('w') as f:
+                        with (directory / ( name + '.key')).open('w') as f:
                             f.write(privatekey)
-                        with (directory / name + '.crt').open('w') as f:
+                        with (directory / ( name + '.crt')).open('w') as f:
                             f.write(fullchain)
-                        with (directory / name + '.chain.pem').open('w') as f:
+                        with (directory / ( name + '.chain.pem')).open('w') as f:
                             f.write(chain)
             else:
                 directory = directory / name
@@ -220,6 +234,10 @@ if __name__ == "__main__":
                         help="uses the docker API to restart containers that are labeled with 'com.github.SnowMB.traefik-certificate-extractor.restart_domain=<DOMAIN>' if the domain name of a generated certificates matches. Multiple domains can be seperated by ','")
     parser.add_argument('--dry-run', action='store_true', dest='dry',
                         help="Don't write files and do not start docker containers.")
+    parser.add_argument('-o', '--oneshot', action='store_true',
+                        help="read the .json-file, export the keys, and quit")
+    parser.add_argument('-cr', '--certificate_resolver', default='',
+                        help="name of the certificate resolver to follow")
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--include', nargs='*')
     group.add_argument('--exclude', nargs='*')
@@ -231,6 +249,11 @@ if __name__ == "__main__":
 
     # Create event handler and observer
     event_handler = Handler(args)
+
+    if args.oneshot:
+        event_handler.doTheWork()
+        exit(0)
+
     observer = Observer()
 
     # Register the directory to watch
